@@ -1,19 +1,30 @@
-import streamlit as st 
-from datetime import datetime 
-import pandas as pd 
-from streamlit_gsheets import GSheetsConnection 
-from streamlit_autorefresh import st_autorefresh 
-URL_DE_MI_GOOGLE_SHEETS = "https://docs.google.com/spreadsheets/d/1l3GE-QIu--mgu-XezYnHQBlBkE08YE3dLgRrtYdc1HM/edit?usp=sharing" 
-try: 
-    conn = st.connection("gsheets", type=GSheetsConnection) 
-except Exception as e: 
-    st.error(f"Error: {e}") 
+import streamlit as st
+from datetime import datetime
+import pandas as pd
+from streamlit_gsheets import GSheetsConnection
+from streamlit_autorefresh import st_autorefresh
+
+# Configuración de la App en modo oscuro nativo de Streamlit
+st.set_page_config(page_title="Control Logístico Maestro", layout="wide")
+
+# Forzar el refresco de pantalla dinámico en espejo cada 3 segundos
+st_autorefresh(interval=3000, key="datarefresh")
+
+# Obtener la URL desde los Secrets de Streamlit de forma segura
+try:
+    URL_DE_MI_GOOGLE_SHEETS = st.secrets["connections"]["gsheets"]["spreadsheet"]
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception as e:
+    st.error("🚨 Falta configurar la URL en la pestaña de 'Secrets' de Streamlit Cloud.")
     st.stop()
+
 def cargar_datos_web():
     try:
         df = conn.read(spreadsheet=URL_DE_MI_GOOGLE_SHEETS, ttl="0s")
         if df.empty or df.columns is None:
             return []
+        # Limpiar filas y columnas completamente vacías de Google Sheets
+        df = df.dropna(how='all')
         return df.to_dict(orient="records")
     except:
         return []
@@ -42,9 +53,6 @@ def calcular_minutos(hora_inicio, hora_fin):
         return round(td.total_seconds() / 60, 2)
     except: return 0
 
-# Forzar el refresco de pantalla dinámico en espejo cada 3 segundos
-st_autorefresh(interval=3000, key="datarefresh")
-
 st.title("📦 Sistema de Control Logístico Maestro (Espejo en Tiempo Real)")
 
 # --- DISEÑO DE LOS 5 APARTADOS (PESTAÑAS) ---
@@ -68,13 +76,16 @@ with tab_carga:
         if txt_notas.strip():
             lineas_n = txt_notas.strip().split("\n")
             lineas_c = txt_cants.strip().split("\n") if txt_cants.strip() else []
-            next_id = max([int(r['id']) for r in st.session_state.registros if str(r.get('id', '')).isdigit()]) + 1 if st.session_state.registros else 1
+            
+            # Buscar el ID más alto de forma segura
+            ids_validos = [int(r['id']) for r in st.session_state.registros if 'id' in r and str(r['id']).isdigit()]
+            next_id = max(ids_validos) + 1 if ids_validos else 1
             
             for idx, nota in enumerate(lineas_n):
                 if nota.strip():
                     cant_real = lineas_c[idx].strip() if idx < len(lineas_c) and lineas_c[idx].strip() != "" else "0"
                     st.session_state.registros.append({
-                        "id": next_id, "fecha": fecha_formateada, "nota": nota.strip(), "cantidad": cant_real,
+                        "id": int(next_id), "fecha": str(fecha_formateada), "nota": str(nota.strip()), "cantidad": str(cant_real),
                         "bultos": "", "estado": "Pendiente", "separador": "", "ini_sep": "", "fin_sep": "",
                         "salida_user": "", "ini_salida": "", "fin_salida": "", "entrega": "", "destino": ""
                     })
@@ -188,17 +199,3 @@ with tab_pc3:
                     guardar_datos_web(st.session_state.registros)
                     
                 col_op.markdown(f"Sep: **{r.get('separador', '--')}**<br>Sal: **{r.get('salida_user', '--')}**", unsafe_allow_html=True)
-                col_tim.markdown(f"⏱️ S: {r.get('ini_sep', '--')} / {r.get('fin_sep', '--')}<br>⏱️ C: {r.get('ini_salida', '--')} / {r.get('fin_salida', '--')}", unsafe_allow_html=True)
-                
-                is_entregado = r.get('estado') == "Entregado"
-                if is_entregado:
-                    col_ent.success(f"📦 Nota Entregada\n⏱️ {r.get('entrega', '--:--:--')}")
-                    if col_ent.button("🔄 Revertir", key=f"btn_rev_{r['id']}"):
-                        r['estado'] = "Finalizado"
-                        r['entrega'] = ""
-                        sincronizar_y_recargar()
-                else:
-                    col_ent.error("🚨 Pendiente")
-                    if col_ent.button("✅ Entregar", key=f"btn_entregado_{r['id']}", type="primary"):
-                        r['estado'] = "Entregado"
-                        r['entrega'] = obtener_hora()
